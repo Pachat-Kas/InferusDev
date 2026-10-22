@@ -1,0 +1,75 @@
+name: Daily Upstream Sync
+
+on:
+  schedule:
+    - cron: "17 2 * * *"  # every day at 02:17 UTC, off the hour to dodge GitHub queue delays
+  workflow_dispatch:
+
+jobs:
+  sync:
+    if: github.repository == 'Pachat-Kas/InferusDev'
+    runs-on: ubuntu-latest
+
+    env:
+      BASE_OWNER: MoffiaDev
+      BASE_REPO: InferusDev
+      BASE_BRANCH: main
+
+    steps:
+      - name: Create sync branch
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.BOT_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const { BASE_OWNER, BASE_REPO, BASE_BRANCH } = process.env;
+
+            const cmp = await github.rest.repos.compareCommits({
+              owner: BASE_OWNER, repo: BASE_REPO, base: BASE_BRANCH, head: `${owner}:upstream`
+            });
+            core.info(`Upstream is ${cmp.data.ahead_by} commit(s) ahead of ${BASE_OWNER}/${BASE_BRANCH}`);
+            if (cmp.data.ahead_by === 0)
+              return;
+
+            const branch = `sync/upstream-${new Date().toISOString().slice(0, 10)}`;
+            const sha = (await github.rest.repos.getBranch({ owner, repo, branch: "upstream" })).data.commit.sha;
+
+            try {
+              await github.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha });
+            } catch (e) {
+              if (e.status !== 422) throw e;
+              await github.rest.git.updateRef({ owner, repo, ref: `heads/${branch}`, sha, force: true });
+            }
+            core.info(`Pushed ${branch} at ${sha}`);
+
+      - name: Delete merged sync branches
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.BOT_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const { BASE_OWNER, BASE_REPO, BASE_BRANCH } = process.env;
+
+            const branches = (await github.paginate(github.rest.repos.listBranches, { owner, repo, per_page: 100 }))
+              .map(b => b.name)
+              .filter(n => n.startsWith("sync/upstream-"));
+
+            for (const branch of branches) {
+              const open = await github.rest.pulls.list({ owner: BASE_OWNER, repo: BASE_REPO, state: "open", head: `${owner}:${branch}` });
+              if (open.data.length > 0) {
+                core.info(`Keeping ${branch}: open PR #${open.data[0].number}`);
+                continue;
+              }
+
+              const cmp = await github.rest.repos.compareCommits({
+                owner: BASE_OWNER, repo: BASE_REPO, base: BASE_BRANCH, head: `${owner}:${branch}`
+              });
+              if (cmp.data.ahead_by > 0) {
+                core.info(`Keeping ${branch}: ${cmp.data.ahead_by} commit(s) not in ${BASE_OWNER}/${BASE_BRANCH}`);
+                continue;
+              }
+
+              await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch}` });
+              core.info(`Deleted ${branch}`);
+            }

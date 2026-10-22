@@ -1,0 +1,35 @@
+name: Pull Upstream
+
+on:
+  workflow_dispatch:
+  schedule:
+  - cron: "0 */2 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.repository == 'Pachat-Kas/InferusDev'
+    runs-on: ubuntu-latest
+
+    env:
+      UPSTREAM_URL: https://github.com/DeltaV-Station/Delta-v.git
+      ORG_URL: https://github.com/MoffiaDev/InferusDev.git
+
+    steps:
+    - name: Fetch branches
+      run: |
+        git init -q
+        git fetch --no-tags "$UPSTREAM_URL" master:refs/remotes/upstream/master
+        git fetch --no-tags "$ORG_URL" main:refs/remotes/org/main
+
+    - name: Push updates
+      env:
+        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: |
+        git remote add origin https://x-access-token:${BOT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
+        git push --force origin \
+          refs/remotes/upstream/master:refs/heads/upstream \
+          refs/remotes/org/main:refs/heads/main
